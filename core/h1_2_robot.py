@@ -15,7 +15,14 @@ kTopicLowCommand = "rt/lowcmd"
 kTopicLowState = "rt/lowstate"
 kNumMotors = 35
 
-
+# class MotorCmd_(idl.IdlStruct, typename="unitree_hg.msg.dds_.MotorCmd_"):
+#     mode: types.uint8 = field(default_factory=lambda: 0)
+#     q: types.float32 = field(default_factory=lambda: 0)
+#     dq: types.float32 = field(default_factory=lambda: 0)
+#     tau: types.float32 = field(default_factory=lambda: 0)
+#     kp: types.float32 = field(default_factory=lambda: 0)
+#     kd: types.float32 = field(default_factory=lambda: 0)
+#     reserve: types.uint32 = field(default_factory=lambda: 0)
 
 class MotorCommand:
     def __init__(self):
@@ -25,15 +32,36 @@ class MotorCommand:
         self.kp = np.zeros(kNumMotors)  
         self.kd = np.zeros(kNumMotors)  
 
+# class MotorState_(idl.IdlStruct, typename="unitree_hg.msg.dds_.MotorState_"):
+#     mode: types.uint8
+#     q: types.float32
+#     dq: types.float32
+#     ddq: types.float32
+#     tau_est: types.float32
+#     temperature: types.array[types.int16, 2]
+#     vol: types.float32
+#     sensor: types.array[types.uint32, 2]
+#     motorstate: types.uint32
+#     reserve: types.array[types.uint32, 4]
+
 class MotorState:
     def __init__(self):
         self.q = np.zeros(kNumMotors)
         self.dq = np.zeros(kNumMotors)
 
-class BaseState:
+# class IMUState_(idl.IdlStruct, typename="unitree_hg.msg.dds_.IMUState_"):
+#     quaternion: types.array[types.float32, 4]
+#     gyroscope: types.array[types.float32, 3]
+#     accelerometer: types.array[types.float32, 3]
+#     rpy: types.array[types.float32, 3]
+#     temperature: types.int16
+
+class RootState:
     def __init__(self):
         self.omega = np.zeros(3)
         self.rpy = np.zeros(3)
+        self.acc = np.zeros(3)
+        self.quat = np.zeros(4)
 
 class DataBuffer:
     def __init__(self):
@@ -50,7 +78,7 @@ class DataBuffer:
 
 np.set_printoptions(linewidth=240)
 
-class H1ArmController:
+class H12RobotController:
     def __init__(self):
         print("Initialize H1ArmController...")
         self.q_desList = np.zeros(kNumMotors)
@@ -88,13 +116,15 @@ class H1ArmController:
         while not self.lowstate_subscriber.msg:
             print("lowstate_subscriber is not ok! Please check dds.")
             time.sleep(0.01)
-        
+        print("lowstate_subscriber is ok!")
+
         for id in JointIndex:
             self.msg.motor_cmd[id].q = self.lowstate_subscriber.msg.motor_state[id].q
             self.q_target.append(self.msg.motor_cmd[id].q)
         print(f"Init q_pose is :{self.q_target}")
         duration = 1000
         init_q = np.array([self.lowstate_subscriber.msg.motor_state[id].q for id in JointIndex])
+        
         print("Lock Leg...")
         for i in range(duration):
             time.sleep(0.001)
@@ -118,12 +148,13 @@ class H1ArmController:
 
         self.command_writer_thread = threading.Thread(target=self.LowCommandWriter)
         self.command_writer_thread.start()
-        print("Initialize H1ArmController OK!")
+        
+        print("Initialize H12RobotController OK!")
 
     def LowStateHandler(self, message):
         low_state = message
         self.RecordMotorState(low_state)
-        self.RecordBaseState(low_state)
+        self.RecordRootState(low_state)
 
     def SetMotorPose(self,q_desList,q_tau_ff):
         self.q_desList = q_desList
@@ -189,7 +220,7 @@ class H1ArmController:
         while True:
             mc_tmp_ptr = self.motor_command_buffer.GetData()
             if mc_tmp_ptr:
-                for i in JointArmIndex:
+                for i in JointIndex: # changed from JointArmIndex
                     self.msg.motor_cmd[i].tau = mc_tmp_ptr.tau_ff[i]  
                     self.msg.motor_cmd[i].q = mc_tmp_ptr.q_ref[i]  
                     self.msg.motor_cmd[i].dq = mc_tmp_ptr.dq_ref[i]  
@@ -201,6 +232,7 @@ class H1ArmController:
             time.sleep(0.002)
                   
     def Control(self):
+        # main loop for algorithms
         while True:
             ms_tmp_ptr = self.motor_state_buffer.GetData()  
             if ms_tmp_ptr: 
@@ -249,10 +281,12 @@ class H1ArmController:
             ms_tmp.dq[i] = msg.motor_state[i].dq
         self.motor_state_buffer.SetData(ms_tmp)
 
-    def RecordBaseState(self, msg):
-        bs_tmp = BaseState()
-        bs_tmp.omega = msg.imu_state.gyroscope
-        bs_tmp.rpy = msg.imu_state.rpy
+    def RecordRootState(self, msg):
+        bs_tmp = RootState()
+        bs_tmp.omega = msg.imu_state.gyroscope # angle speed rad/s
+        bs_tmp.rpy = msg.imu_state.rpy # roll, pitch, yaw
+        bs_tmp.acc = msg.imu_state.accelerometer # acc m/s^2
+        bs_tmp.quat = msg.imu_state.quaternion # quaternion
         self.base_state_buffer.SetData(bs_tmp)
 
     def IsWeakMotor(self, motor_index):
